@@ -77,7 +77,7 @@ LLAMA3_INSTRUCT_TEMPLATE = {"type": "model", "model": "meta-llama/Meta-Llama-3-8
 # "chatml" – explicit <|im_start|> / <|im_end|> wrapping
 # "native" – model's own chat template (specified per-model)
 
-TEMPLATES = ["native", "chatml", "none"]
+TEMPLATES = ["chatml", "native", "none"]
 
 # ── Principal components ──────────────────────────────────────────────────────
 # None  → no steering (baseline)
@@ -93,10 +93,10 @@ COEFFICIENTS = [-2.0, -1.5, -1.0, -0.75, -0.5, -0.3, -0.2, -0.1, 0.1, 0.2, 0.3, 
 
 # ── Generation settings ───────────────────────────────────────────────────────
 
-MAX_NEW_TOKENS = 512
+MAX_NEW_TOKENS = 200
 TEMPERATURE = 0.7
 GREEDY = False          # set True to override TEMPERATURE with greedy decoding
-N_SAMPLES = 30          # independent samples per (prompt, template, pc, coeff) combo
+N_SAMPLES = 20          # independent samples per (prompt, template, pc, coeff) combo
 BATCH_SIZE = 24          # number of prompts to process in parallel (same steering config)
 
 # ── Layer selection ───────────────────────────────────────────────────────────

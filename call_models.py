@@ -25,6 +25,7 @@ in OUTPUT_DIR, one per model: {model_short}_steering_results.jsonl
 """
 
 import json
+import sys
 import uuid
 from collections import defaultdict
 from pathlib import Path
@@ -81,9 +82,12 @@ def load_model(model_name: str, device: str = "cuda"):
         torch_dtype=torch.float16,
         device_map=device
     )
+    print(f"Loaded model", flush=True)
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.padding_side = "left"
+    print(f"Loaded tokenizer", flush=True)
     return model, tokenizer
 
 
@@ -106,7 +110,7 @@ def load_pca(model_dict: dict):
     data = torch.load(path, map_location='cpu', weights_only=False)
 
     print(f"  Loaded PCA: layer {data['chosen_layer']}/{data['n_layers']}, {data['n_roles']} roles")
-    print(f"  PC1 explains {data['var_exp'][0]*100:.1f}% variance")
+    print(f"  PC1 explains {data['var_exp'][0] * 100:.1f}% variance")
 
     return (
         data["pc_dirs"].numpy(),
@@ -150,16 +154,41 @@ def resolve_template(template_obj, tokenizer=None):
     if template_obj is None:
         return tokenizer.chat_template if tokenizer else None
 
+    print(f"  Resolving template type='{template_obj['type']}'", flush=True)
+
     if template_obj["type"] == "jinja":
         return template_obj["template"]
     elif template_obj["type"] == "model":
+        print(f"    Loading tokenizer from {template_obj['model']}...", flush=True)
         ref_tokenizer = AutoTokenizer.from_pretrained(template_obj["model"])
         return ref_tokenizer.chat_template
     else:
         raise ValueError(f"Unknown template type: {template_obj['type']}")
 
 
-def build_prompt(tokenizer, template: str, prompt_text: str, model_dict: dict) -> str:
+def resolve_all_templates(model_dict: dict, tokenizer) -> dict:
+    """
+    Resolve all templates once per model, returning a dict of template name -> Jinja string.
+    """
+    print("  Resolving templates...", flush=True)
+    resolved = {}
+
+    for template in TEMPLATES:
+        if template == "none":
+            resolved[template] = None
+        elif template == "chatml":
+            resolved[template] = resolve_template(cfg.CHATML_TEMPLATE)
+        elif template == "native":
+            native_template_obj = model_dict.get("native_template")
+            resolved[template] = resolve_template(native_template_obj, tokenizer)
+        else:
+            raise ValueError(f"Unknown template: {template}")
+
+    print("  Templates resolved.", flush=True)
+    return resolved
+
+
+def build_prompt(tokenizer, template: str, prompt_text: str, resolved_templates: dict) -> str:
     """Build the full prompt string based on template type."""
     if template == "none":
         return prompt_text
@@ -169,16 +198,11 @@ def build_prompt(tokenizer, template: str, prompt_text: str, model_dict: dict) -
         messages.append({"role": "system", "content": SYSTEM_PROMPT})
     messages.append({"role": "user", "content": prompt_text})
 
-    if template == "chatml":
-        chat_template = resolve_template(cfg.CHATML_TEMPLATE)
-    elif template == "native":
-        chat_template = resolve_template(model_dict.get("native_template"), tokenizer)
-    else:
-        raise ValueError(f"Unknown template: {template}")
+    chat_template = resolved_templates[template]
 
     if chat_template is None:
         raise ValueError(
-            f"No chat template available for template='{template}' on model '{model_dict['model']}'. "
+            f"No chat template available for template='{template}'. "
             f"Set 'native_template' in model config."
         )
 
@@ -191,13 +215,13 @@ def build_prompt(tokenizer, template: str, prompt_text: str, model_dict: dict) -
 
 
 def generate_batch(
-    model,
-    tokenizer,
-    prompts: list[str],
-    pc_vector=None,
-    coeff: float = 0.0,
-    layer_idx: int = None,
-    norm_scale: float = 1.0
+        model,
+        tokenizer,
+        prompts: list[str],
+        pc_vector=None,
+        coeff: float = 0.0,
+        layer_idx: int = None,
+        norm_scale: float = 1.0
 ) -> list[str]:
     """Generate responses for a batch of prompts, optionally with activation steering."""
     inputs = tokenizer(
@@ -220,12 +244,12 @@ def generate_batch(
         steering_vector = torch.tensor(pc_vector, dtype=torch.float16)
 
         with ActivationSteering(
-            model,
-            steering_vectors=[steering_vector],
-            coefficients=[scaled_coeff],
-            layer_indices=[layer_idx],
-            intervention_type="addition",
-            positions="all"
+                model,
+                steering_vectors=[steering_vector],
+                coefficients=[scaled_coeff],
+                layer_indices=[layer_idx],
+                intervention_type="addition",
+                positions="all"
         ):
             with torch.no_grad():
                 outputs = model.generate(inputs.input_ids, attention_mask=inputs.attention_mask, **gen_kwargs)
@@ -264,18 +288,23 @@ def main():
         # Load model
         model, tokenizer = load_model(model_name)
 
+        # Resolve all templates
+        resolved_templates = resolve_all_templates(model_dict, tokenizer)
+
         # Build jobs grouped by steering config (pc, coeff) for batching
         # Jobs with same steering can be batched together
         jobs_by_steering = defaultdict(list)
+
+        print(f"  Building jobs for templates: {TEMPLATES}", flush=True)
         for template in TEMPLATES:
             prompts = PROMPTS["completion"] if template == "none" else PROMPTS["response"]
 
-            for prompt_text in prompts:
+            for prompt_idx, prompt_text in enumerate(prompts):
                 for pc in PCS:
                     coeff_list = [0.0] if pc is None else COEFFICIENTS
                     for coeff in coeff_list:
                         for sample_idx in range(N_SAMPLES):
-                            full_prompt = build_prompt(tokenizer, template, prompt_text, model_dict)
+                            full_prompt = build_prompt(tokenizer, template, prompt_text, resolved_templates)
                             steering_key = (pc, coeff)
                             jobs_by_steering[steering_key].append({
                                 "template": template,
@@ -289,8 +318,12 @@ def main():
         # Count total jobs for progress bar
         total_jobs = sum(len(jobs) for jobs in jobs_by_steering.values())
 
+        print(f"  Built {total_jobs} jobs across {len(jobs_by_steering)} steering configs", flush=True)
+
         # Write results incrementally per model
         with open(out_path, "w") as fh:
+            print(f"  Starting generation...", flush=True)
+
             pbar = tqdm(total=total_jobs, desc=f"  {model_short_name(model_dict)}", unit="gen")
 
             for (pc, coeff), jobs in jobs_by_steering.items():
