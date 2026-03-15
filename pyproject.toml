@@ -1,0 +1,15 @@
+[project]
+name = "steering-experiments"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.0",
+    "transformers>=4.40",
+    "accelerate>=0.27",       # required for device_map="auto"
+    "datasets>=2.18",         # for LMSYS-CHAT-1M in setup.py
+    "huggingface-hub>=0.22",
+    "scikit-learn>=1.3",      # PCA in prepare_pca.py
+    "numpy>=1.24",
+    "tqdm>=4.65",
+    "plotly>=5.18",           # imported transitively via assistant_axis.pca
+]

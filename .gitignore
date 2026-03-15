@@ -1,0 +1,6 @@
+setup_data/
+results/
+__pycache__/
+*.pyc
+*.pyo
+.env
