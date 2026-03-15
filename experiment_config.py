@@ -1,4 +1,4 @@
-# Experiment configuration for sample.py
+# Experiment configuration for call_models.py
 # Edit this file to define the prompts, templates, PCs, and steering strengths.
 
 # ── Paths (relative to script location) ───────────────────────────────────────
@@ -40,19 +40,44 @@ PROMPTS = {
     ]
 }
 
-# ── Templates ─────────────────────────────────────────────────────────────────
-# "none"   – raw completion, no chat formatting
-# "chatml" – explicit <|im_start|> / <|im_end|> wrapping
-# "native" – model's own chat template
+# ── Template Objects ──────────────────────────────────────────────────────────
+# Templates can be specified as:
+#   {"type": "jinja", "template": "..."}  - explicit Jinja template string
+#   {"type": "model", "model": "..."}     - load from another model's tokenizer
+#   None                                   - use the model's own tokenizer.chat_template
 
-TEMPLATES = ["native", "chatml", "none"]
+ALPACA_TEMPLATE = {
+    "type": "jinja",
+    "template": (
+        "BEGINNING OF CONVERSATION: "
+        "{%- for message in messages %}"
+        "{%- if message['role'] == 'user' %} USER: {{ message['content'] }} "
+        "{% elif message['role'] == 'assistant' -%}ASSISTANT:{{ message['content'] }}{{ eos_token }}"
+        "{%- if not loop.last %}{% endif %}{%- endif %}"
+        "{%- endfor %}"
+        "{%- if add_generation_prompt and messages[-1]['role'] == 'user' %}ASSISTANT:{%- endif %}"
+    ),
+}
 
-CHATML_TEMPLATE = """{% for message in messages %}
+CHATML_TEMPLATE = {
+    "type": "jinja",
+    "template": """{% for message in messages %}
 <|im_start|>{{ message['role'] }}
 {{ message['content'] }}<|im_end|>
 {% endfor %}
 <|im_start|>assistant
-"""
+""",
+}
+
+LLAMA2_CHAT_TEMPLATE = {"type": "model", "model": "meta-llama/Llama-2-7b-chat-hf"}
+LLAMA3_INSTRUCT_TEMPLATE = {"type": "model", "model": "meta-llama/Meta-Llama-3-8B-Instruct"}
+
+# ── Templates ─────────────────────────────────────────────────────────────────
+# "none"   – raw completion, no chat formatting
+# "chatml" – explicit <|im_start|> / <|im_end|> wrapping
+# "native" – model's own chat template (specified per-model)
+
+TEMPLATES = ["native", "chatml", "none"]
 
 # ── Principal components ──────────────────────────────────────────────────────
 # None  → no steering (baseline)
@@ -72,6 +97,7 @@ MAX_NEW_TOKENS = 512
 TEMPERATURE = 0.7
 GREEDY = False          # set True to override TEMPERATURE with greedy decoding
 N_SAMPLES = 30          # independent samples per (prompt, template, pc, coeff) combo
+BATCH_SIZE = 24          # number of prompts to process in parallel (same steering config)
 
 # ── Layer selection ───────────────────────────────────────────────────────────
 LAYER_FRAC = 0.5        # relative depth used for all models (0 = input, 1 = final)
@@ -89,38 +115,39 @@ NORM_DATASET = "lmsys/lmsys-chat-1m"
 FORCE_RECOMPUTE_NORMS = False
 
 # ── Models ────────────────────────────────────────────────────────────────────
-# native_template: HuggingFace model name whose chat template to use for
-#                  template="native". Useful for base models that don't have
-#                  their own chat template. Omit (or set None) to use the
-#                  model's own tokenizer template.
+# native_template: Template object for template="native". Use None to pull from
+#                  the model's own tokenizer (for instruct/chat models).
 
 MODELS = [
     {
         "model":           "dfurman/LLaMA-7B",
         "vectors_dir":     "outputs/llama-7b/vectors",
-        "native_template": "PKU-Alignment/alpaca-7b-reproduced",
+        "native_template": ALPACA_TEMPLATE,
     },
     {
-        "model":       "PKU-Alignment/alpaca-7b-reproduced",
-        "vectors_dir": "outputs/alpaca-7b/vectors",
+        "model":           "PKU-Alignment/alpaca-7b-reproduced",
+        "vectors_dir":     "outputs/alpaca-7b/vectors",
+        "native_template": ALPACA_TEMPLATE,
     },
     {
         "model":           "meta-llama/Llama-2-7b-hf",
         "vectors_dir":     "outputs/llama2-7b-hf/vectors",
-        "native_template": "meta-llama/Llama-2-7b-chat-hf",
+        "native_template": LLAMA2_CHAT_TEMPLATE,
     },
     {
-        "model":       "meta-llama/Llama-2-7b-chat-hf",
-        "vectors_dir": "outputs/llama2-7b-chat-hf/vectors",
+        "model":           "meta-llama/Llama-2-7b-chat-hf",
+        "vectors_dir":     "outputs/llama2-7b-chat-hf/vectors",
+        "native_template": None,  # use model's own tokenizer
     },
     {
         "model":           "meta-llama/Meta-Llama-3-8B",
         "vectors_dir":     "outputs/llama3-8b/vectors",
-        "native_template": "meta-llama/Meta-Llama-3-8B-Instruct",
+        "native_template": LLAMA3_INSTRUCT_TEMPLATE,
     },
     {
-        "model":       "meta-llama/Meta-Llama-3-8B-Instruct",
-        "vectors_dir": "outputs/llama3-8b-instruct/vectors",
+        "model":           "meta-llama/Meta-Llama-3-8B-Instruct",
+        "vectors_dir":     "outputs/llama3-8b-instruct/vectors",
+        "native_template": None,  # use model's own tokenizer
     },
 ]
 

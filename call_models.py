@@ -26,9 +26,11 @@ in OUTPUT_DIR, one per model: {model_short}_steering_results.jsonl
 
 import json
 import uuid
+from collections import defaultdict
 from pathlib import Path
 
 import torch
+from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from assistant_axis import ActivationSteering
@@ -46,6 +48,7 @@ MAX_NEW_TOKENS = getattr(cfg, "MAX_NEW_TOKENS", 512)
 TEMPERATURE = getattr(cfg, "TEMPERATURE", 0.7)
 DO_SAMPLE = not getattr(cfg, "GREEDY", False)
 N_SAMPLES = getattr(cfg, "N_SAMPLES", 1)
+BATCH_SIZE = getattr(cfg, "BATCH_SIZE", 8)
 
 SETUP_DATA_DIR = Path(getattr(cfg, "SETUP_DATA_DIR", "setup_data"))
 OUTPUT_DIR = Path(getattr(cfg, "OUTPUT_DIR", "outputs"))
@@ -130,15 +133,33 @@ def load_residual_norms(model_dict: dict, chosen_layer: int) -> float:
     return norm
 
 
-def get_native_template(model_dict: dict):
-    """Load chat template from native_template model if specified."""
-    if model_dict.get("native_template"):
-        template_tokenizer = AutoTokenizer.from_pretrained(model_dict["native_template"])
-        return template_tokenizer.chat_template
-    return None
+def resolve_template(template_obj, tokenizer=None):
+    """
+    Resolve a template object to a Jinja string.
+
+    Args:
+        template_obj: None, or dict with "type" key:
+            - {"type": "jinja", "template": "..."} -> return the string
+            - {"type": "model", "model": "..."} -> load from that model's tokenizer
+            - None -> return tokenizer.chat_template (may be None)
+        tokenizer: fallback tokenizer for type=None
+
+    Returns:
+        Jinja template string, or None
+    """
+    if template_obj is None:
+        return tokenizer.chat_template if tokenizer else None
+
+    if template_obj["type"] == "jinja":
+        return template_obj["template"]
+    elif template_obj["type"] == "model":
+        ref_tokenizer = AutoTokenizer.from_pretrained(template_obj["model"])
+        return ref_tokenizer.chat_template
+    else:
+        raise ValueError(f"Unknown template type: {template_obj['type']}")
 
 
-def build_prompt(tokenizer, template: str, prompt_text: str, native_chat_template=None) -> str:
+def build_prompt(tokenizer, template: str, prompt_text: str, model_dict: dict) -> str:
     """Build the full prompt string based on template type."""
     if template == "none":
         return prompt_text
@@ -149,11 +170,17 @@ def build_prompt(tokenizer, template: str, prompt_text: str, native_chat_templat
     messages.append({"role": "user", "content": prompt_text})
 
     if template == "chatml":
-        chat_template = cfg.CHATML_TEMPLATE
+        chat_template = resolve_template(cfg.CHATML_TEMPLATE)
     elif template == "native":
-        chat_template = native_chat_template
+        chat_template = resolve_template(model_dict.get("native_template"), tokenizer)
     else:
         raise ValueError(f"Unknown template: {template}")
+
+    if chat_template is None:
+        raise ValueError(
+            f"No chat template available for template='{template}' on model '{model_dict['model']}'. "
+            f"Set 'native_template' in model config."
+        )
 
     return tokenizer.apply_chat_template(
         messages,
@@ -163,17 +190,22 @@ def build_prompt(tokenizer, template: str, prompt_text: str, native_chat_templat
     )
 
 
-def generate(
+def generate_batch(
     model,
     tokenizer,
-    prompt: str,
+    prompts: list[str],
     pc_vector=None,
     coeff: float = 0.0,
     layer_idx: int = None,
     norm_scale: float = 1.0
-) -> str:
-    """Generate a response, optionally with activation steering."""
-    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+) -> list[str]:
+    """Generate responses for a batch of prompts, optionally with activation steering."""
+    inputs = tokenizer(
+        prompts,
+        return_tensors="pt",
+        padding=True,
+        truncation=True,
+    ).to(model.device)
 
     gen_kwargs = dict(
         max_new_tokens=MAX_NEW_TOKENS,
@@ -196,13 +228,20 @@ def generate(
             positions="all"
         ):
             with torch.no_grad():
-                outputs = model.generate(inputs.input_ids, **gen_kwargs)
+                outputs = model.generate(inputs.input_ids, attention_mask=inputs.attention_mask, **gen_kwargs)
     else:
         with torch.no_grad():
-            outputs = model.generate(inputs.input_ids, **gen_kwargs)
+            outputs = model.generate(inputs.input_ids, attention_mask=inputs.attention_mask, **gen_kwargs)
 
-    generated_tokens = outputs[0, inputs.input_ids.shape[1]:]
-    return tokenizer.decode(generated_tokens, skip_special_tokens=True)
+    # Decode each response, stripping the input prompt
+    responses = []
+    for i, output in enumerate(outputs):
+        # Find where the actual input ends (excluding padding)
+        input_len = inputs.attention_mask[i].sum().item()
+        generated_tokens = output[input_len:]
+        responses.append(tokenizer.decode(generated_tokens, skip_special_tokens=True))
+
+    return responses
 
 
 def main():
@@ -224,49 +263,71 @@ def main():
 
         # Load model
         model, tokenizer = load_model(model_name)
-        native_chat_template = get_native_template(model_dict)
+
+        # Build jobs grouped by steering config (pc, coeff) for batching
+        # Jobs with same steering can be batched together
+        jobs_by_steering = defaultdict(list)
+        for template in TEMPLATES:
+            prompts = PROMPTS["completion"] if template == "none" else PROMPTS["response"]
+
+            for prompt_text in prompts:
+                for pc in PCS:
+                    coeff_list = [0.0] if pc is None else COEFFICIENTS
+                    for coeff in coeff_list:
+                        for sample_idx in range(N_SAMPLES):
+                            full_prompt = build_prompt(tokenizer, template, prompt_text, model_dict)
+                            steering_key = (pc, coeff)
+                            jobs_by_steering[steering_key].append({
+                                "template": template,
+                                "prompt_text": prompt_text,
+                                "full_prompt": full_prompt,
+                                "pc": pc,
+                                "coeff": coeff,
+                                "sample_idx": sample_idx,
+                            })
+
+        # Count total jobs for progress bar
+        total_jobs = sum(len(jobs) for jobs in jobs_by_steering.values())
 
         # Write results incrementally per model
         with open(out_path, "w") as fh:
-            for template in TEMPLATES:
-                prompts = PROMPTS["completion"] if template == "none" else PROMPTS["response"]
+            pbar = tqdm(total=total_jobs, desc=f"  {model_short_name(model_dict)}", unit="gen")
 
-                for prompt_text in prompts:
-                    full_prompt = build_prompt(tokenizer, template, prompt_text, native_chat_template)
+            for (pc, coeff), jobs in jobs_by_steering.items():
+                pc_vector = pc_dirs[pc - 1] if pc is not None else None
 
-                    for pc in PCS:
-                        # baseline (pc=None) or steered
-                        coeff_list = [0.0] if pc is None else COEFFICIENTS
+                # Process in batches
+                for batch_start in range(0, len(jobs), BATCH_SIZE):
+                    batch_jobs = jobs[batch_start:batch_start + BATCH_SIZE]
+                    batch_prompts = [job["full_prompt"] for job in batch_jobs]
 
-                        # Get the PC vector if steering (1-indexed in config)
-                        pc_vector = pc_dirs[pc - 1] if pc is not None else None
+                    responses = generate_batch(
+                        model, tokenizer, batch_prompts,
+                        pc_vector=pc_vector,
+                        coeff=coeff,
+                        layer_idx=chosen_layer,
+                        norm_scale=norm_scale
+                    )
 
-                        for coeff in coeff_list:
-                            for sample_idx in range(N_SAMPLES):
-                                response = generate(
-                                    model, tokenizer, full_prompt,
-                                    pc_vector=pc_vector,
-                                    coeff=coeff,
-                                    layer_idx=chosen_layer,
-                                    norm_scale=norm_scale
-                                )
+                    for job, response in zip(batch_jobs, responses):
+                        record = {
+                            "id": str(uuid.uuid4()),
+                            "model": model_name,
+                            "template": job["template"],
+                            "prompt": job["prompt_text"],
+                            "pc": job["pc"],
+                            "coefficient": coeff if pc is not None else None,
+                            "layer": chosen_layer,
+                            "sample_idx": job["sample_idx"],
+                            "response": response
+                        }
 
-                                record = {
-                                    "id": str(uuid.uuid4()),
-                                    "model": model_name,
-                                    "template": template,
-                                    "prompt": prompt_text,
-                                    "pc": pc,
-                                    "coefficient": coeff if pc is not None else None,
-                                    "layer": chosen_layer,
-                                    "sample_idx": sample_idx,
-                                    "response": response
-                                }
+                        fh.write(json.dumps(record) + "\n")
 
-                                fh.write(json.dumps(record) + "\n")
-                                fh.flush()
+                    fh.flush()
+                    pbar.update(len(batch_jobs))
 
-                                print(f"  [{template}] pc={pc} coeff={coeff} sample={sample_idx}")
+            pbar.close()
 
         print(f"  Wrote results to {out_path}")
 
