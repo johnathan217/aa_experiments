@@ -119,35 +119,50 @@ FORCE_RECOMPUTE_NORMS = False
 #                  the model's own tokenizer (for instruct/chat models).
 
 MODELS = [
+    # {
+    #     "model":           "dfurman/LLaMA-7B",
+    #     "vectors_dir":     "outputs/llama-7b/vectors",
+    #     "native_template": ALPACA_TEMPLATE,
+    # },
+    # {
+    #     "model":           "PKU-Alignment/alpaca-7b-reproduced",
+    #     "vectors_dir":     "outputs/alpaca-7b/vectors",
+    #     "native_template": ALPACA_TEMPLATE,
+    # },
+    # {
+    #     "model":           "meta-llama/Llama-2-7b-hf",
+    #     "vectors_dir":     "outputs/llama2-7b-hf/vectors",
+    #     "native_template": LLAMA2_CHAT_TEMPLATE,
+    # },
+    # {
+    #     "model":           "meta-llama/Llama-2-7b-chat-hf",
+    #     "vectors_dir":     "outputs/llama2-7b-chat-hf/vectors",
+    #     "native_template": None,  # use model's own tokenizer
+    # },
+    # {
+    #     "model":           "meta-llama/Meta-Llama-3-8B",
+    #     "vectors_dir":     "outputs/llama3-8b/vectors",
+    #     "native_template": LLAMA3_INSTRUCT_TEMPLATE,
+    # },
+    # {
+    #     "model":           "meta-llama/Meta-Llama-3-8B-Instruct",
+    #     "vectors_dir":     "outputs/llama3-8b-instruct/vectors",
+    #     "native_template": None,  # use model's own tokenizer
+    # },
     {
-        "model":           "dfurman/LLaMA-7B",
-        "vectors_dir":     "outputs/llama-7b/vectors",
-        "native_template": ALPACA_TEMPLATE,
+        "model": "google/gemma-2-27b",
+        "vectors_dir": "assistant-axis-vectors/gemma-2-27b/role_vectors",
+        "native_template": None,
     },
     {
-        "model":           "PKU-Alignment/alpaca-7b-reproduced",
-        "vectors_dir":     "outputs/alpaca-7b/vectors",
-        "native_template": ALPACA_TEMPLATE,
+        "model": "meta-llama/Llama-3.3-70B-Instruct",
+        "vectors_dir": "assistant-axis-vectors/llama3.3-70b/role_vectors",
+        "native_template": None,
     },
     {
-        "model":           "meta-llama/Llama-2-7b-hf",
-        "vectors_dir":     "outputs/llama2-7b-hf/vectors",
-        "native_template": LLAMA2_CHAT_TEMPLATE,
-    },
-    {
-        "model":           "meta-llama/Llama-2-7b-chat-hf",
-        "vectors_dir":     "outputs/llama2-7b-chat-hf/vectors",
-        "native_template": None,  # use model's own tokenizer
-    },
-    {
-        "model":           "meta-llama/Meta-Llama-3-8B",
-        "vectors_dir":     "outputs/llama3-8b/vectors",
-        "native_template": LLAMA3_INSTRUCT_TEMPLATE,
-    },
-    {
-        "model":           "meta-llama/Meta-Llama-3-8B-Instruct",
-        "vectors_dir":     "outputs/llama3-8b-instruct/vectors",
-        "native_template": None,  # use model's own tokenizer
+        "model": "Qwen/Qwen3-32B",
+        "vectors_dir": "assistant-axis-vectors/qwen-3-32b/role_vectors",
+        "native_template": None,
     },
 ]
 
@@ -173,4 +188,4 @@ if __name__ == "__main__":
         t_total = n_prompts * N_SAMPLES * (n_baseline + n_steered * len(COEFFICIENTS))
         print(f"  {template:8s}  {n_prompts} prompts  ->  {t_total} calls")
     print()
-    print(f"Total LLM calls: {total}")
+    print(f"Total LLM calls / model: {total}")
