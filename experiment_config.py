@@ -150,13 +150,13 @@ MODELS = [
     #     "native_template": None,  # use model's own tokenizer
     # },
     {
-        "model": "google/gemma-2-27b",
-        "vectors_dir": "assistant-axis-vectors/gemma-2-27b/role_vectors",
+        "model": "meta-llama/Llama-3.3-70B-Instruct",
+        "vectors_dir": "assistant-axis-vectors/llama3.3-70b/role_vectors",
         "native_template": None,
     },
     {
-        "model": "meta-llama/Llama-3.3-70B-Instruct",
-        "vectors_dir": "assistant-axis-vectors/llama3.3-70b/role_vectors",
+        "model": "google/gemma-2-27b",
+        "vectors_dir": "assistant-axis-vectors/gemma-2-27b/role_vectors",
         "native_template": None,
     },
     {
