@@ -151,11 +151,11 @@ MODELS = [
     # },
     {
         "model": "meta-llama/Llama-3.3-70B-Instruct",
-        "vectors_dir": "assistant-axis-vectors/llama3.3-70b/role_vectors",
+        "vectors_dir": "assistant-axis-vectors/llama-3.3-70b/role_vectors",
         "native_template": None,
     },
     {
-        "model": "google/gemma-2-27b",
+        "model": "google/gemma-2-27b-it",
         "vectors_dir": "assistant-axis-vectors/gemma-2-27b/role_vectors",
         "native_template": None,
     },

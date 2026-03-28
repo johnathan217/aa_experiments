@@ -52,7 +52,7 @@ class ProbingModel:
 
         # Build model loading kwargs
         model_kwargs = {
-            "torch_dtype": dtype,
+            "dtype": dtype,
         }
 
         if max_memory_per_gpu is not None:
